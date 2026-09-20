@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sihti2 — noise writes geometry</title>
+<style>
+:root{color-scheme:dark;--bg:#0d1117;--panel:#151b23;--line:#2d3744;--ink:#e6edf3;--muted:#9aa7b4;--accent:#7aa2f7}
+*{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,sans-serif}
+main{max-width:1180px;margin:auto;padding:24px} h1{margin:.1em 0;font-size:clamp(28px,5vw,52px);letter-spacing:-.03em}
+.lead{max-width:850px;color:var(--muted);font-size:18px}.equation{font-family:ui-monospace,monospace;background:var(--panel);border:1px solid var(--line);padding:12px 14px;border-radius:10px;overflow:auto}
+.controls{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:22px 0}
+label{display:grid;gap:6px;color:var(--muted)}select,input,button{font:inherit}select,button{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:10px}
+input[type=range]{width:100%}.buttons{display:flex;gap:8px;align-items:end}.buttons button{min-width:54px;cursor:pointer}
+.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px;min-width:0}
+.card h2{font-size:14px;font-weight:600;color:var(--muted);margin:0 0 8px}.card canvas{width:100%;height:auto;display:block;image-rendering:pixelated;border-radius:6px;background:#080b10}
+.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:14px 0}.metric{border-top:1px solid var(--line);padding-top:8px}.metric b{display:block;font-size:21px}.metric span{color:var(--muted);font-size:13px}
+.note{margin-top:22px;border-left:3px solid var(--accent);padding:4px 14px;color:var(--muted);max-width:900px}
+a{color:#9cc2ff}.tiny{font-size:13px;color:var(--muted)}
+@media(max-width:850px){.controls,.grid,.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:520px){main{padding:16px}.controls,.grid,.metrics{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+<h1>Noise writes geometry.</h1>
+<p class="lead">IID colour noise defines a random weighted lattice. Lazy diffusion then reveals the regions that are easiest to mix internally and hardest to leak out of. The patches are not “objects”; they are almost-invariant sets of a noise-written conductance graph.</p>
+<div class="equation">x₀ → W(x₀) → T(x₀) → T(x₀)ᵗx₀ &nbsp;&nbsp; with &nbsp;&nbsp; T=(1-a)I+aD⁻¹W, a=½</div>
+
+<section class="controls">
+<label>Geometry
+<select id="control">
+<option value="self">Self — signal writes graph</option>
+<option value="independent">Independent graph noise</option>
+<option value="shuffled">Shuffled conductances</option>
+<option value="lattice">Blank lattice</option>
+</select></label>
+<label>Colour scale σ <strong id="sigmaVal">5.0</strong>
+<input id="sigma" type="range" min="2" max="20" value="5" step=".5"></label>
+<label>Depth <strong id="depthVal">0</strong>
+<input id="depth" type="range" min="0" max="9" value="0" step="1"></label>
+<div class="buttons"><button id="minus">seed −</button><button id="plus">seed +</button><button id="play">play</button></div>
+</section>
+
+<div class="grid">
+<div class="card"><h2>IID signal</h2><canvas id="input" width="192" height="192"></canvas></div>
+<div class="card"><h2>State at selected depth</h2><canvas id="state" width="192" height="192"></canvas></div>
+<div class="card"><h2>What bled out to next octave</h2><canvas id="residue" width="192" height="192"></canvas></div>
+<div class="card"><h2>Local conductance strength</h2><canvas id="conductance" width="192" height="192"></canvas></div>
+</div>
+
+<div class="metrics">
+<div class="metric"><b id="seedOut">0</b><span>signal seed</span></div>
+<div class="metric"><b id="floorOut">—</b><span>edges at 10⁻⁶ floor</span></div>
+<div class="metric"><b id="rmsOut">—</b><span>stationary-measure RMS</span></div>
+<div class="metric"><b id="edgeOut">—</b><span>weighted edge disagreement</span></div>
+</div>
+
+<div class="card"><h2>Geometry-native energy versus Markov time</h2><canvas id="chart" width="1050" height="250"></canvas></div>
+
+<p class="note"><strong>Read the picture backwards.</strong> A crisp late patch does not mean the input contained that object. It means this graph lets that distinction decay slowly. Change the geometry control and ask what survives. The Python experiment in the repository measures the small Laplacian spectrum, relaxation time, heat trace and effective spectral-dimension slope.</p>
+<p class="tiny"><a href="https://github.com/anttiluode/Sihti2">Sihti2 source</a> · lineage: SighImageSuper → Sihti → Sihti2</p>
+</main>
+<script>
+(()=>{
+const N=48, floor=1e-6, depths=[0,1,2,4,8,16,32,64,128,256];
+let seed=0,timer=null,cache=null;
+const $=id=>document.getElementById(id);
+function rng(s){let x=(s|0)^0x9e3779b9;return()=>{x^=x<<13;x^=x>>>17;x^=x<<5;return((x>>>0)+.5)/4294967296}}
+function noise(s){const r=rng(s),x=new Float64Array(N*N*3);for(let i=0;i<x.length;i++)x[i]=r();return x}
+function lab(rgb){
+ const out=new Float64Array(rgb.length), M=[[.4124564,.3575761,.1804375],[.2126729,.7151522,.0721750],[.0193339,.1191920,.9503041]], W=[.95047,1,1.08883],eps=216/24389,k=24389/27;
+ for(let p=0;p<N*N;p++){let q=[];for(let c=0;c<3;c++){let v=rgb[3*p+c];q[c]=v<=.04045?v/12.92:Math.pow((v+.055)/1.055,2.4)}
+  let xyz=[];for(let a=0;a<3;a++)xyz[a]=(M[a][0]*q[0]+M[a][1]*q[1]+M[a][2]*q[2])/W[a];
+  let f=xyz.map(v=>v>eps?Math.cbrt(v):(k*v+16)/116);
+  out[3*p]=116*f[1]-16;out[3*p+1]=500*(f[0]-f[1]);out[3*p+2]=200*(f[1]-f[2]);
+ } return out;
+}
+function edgePattern(){
+ const E=[];for(let y=0;y<N;y++)for(let x=0;x<N;x++)for(const [dy,dx] of [[0,1],[1,-1],[1,0],[1,1]]){let yy=y+dy,xx=x+dx;if(yy<N&&xx>=0&&xx<N)E.push([y*N+x,yy*N+xx,dy*dy+dx*dx])}return E
+}
+const pattern=edgePattern();
+function buildGraph(signal,kind,sigma){
+ let source=signal;if(kind==="independent")source=noise(seed+1000003);
+ const L=lab(source),weights=new Float64Array(pattern.length),sx=1.5;
+ for(let e=0;e<pattern.length;e++){const [i,j,s2]=pattern[e];let spatial=Math.exp(-s2/(2*sx*sx)),w=spatial;
+  if(kind!=="lattice"){let d=0;for(let c=0;c<3;c++){let z=L[3*i+c]-L[3*j+c];d+=z*z}w=Math.max(floor,Math.exp(-d/(2*sigma*sigma))*spatial)}
+  weights[e]=w;
+ }
+ if(kind==="shuffled"){let r=rng(seed+2000003);for(let i=weights.length-1;i>0;i--){let j=Math.floor(r()*(i+1)),t=weights[i];weights[i]=weights[j];weights[j]=t}}
+ const deg=new Float64Array(N*N),adj=Array.from({length:N*N},()=>[]);
+ for(let e=0;e<pattern.length;e++){let [i,j]=pattern[e],w=weights[e];deg[i]+=w;deg[j]+=w;adj[i].push([j,w]);adj[j].push([i,w])}
+ return {weights,deg,adj};
+}
+function step(x,g){let y=new Float64Array(x.length);for(let i=0;i<N*N;i++)for(let c=0;c<3;c++){let avg=0;for(const [j,w] of g.adj[i])avg+=w*x[3*j+c];avg/=g.deg[i];y[3*i+c]=.5*x[3*i+c]+.5*avg}return y}
+function piRms(x,g){let S=0;for(let d of g.deg)S+=d;let m=[0,0,0];for(let i=0;i<N*N;i++)for(let c=0;c<3;c++)m[c]+=g.deg[i]*x[3*i+c]/S;let v=0;for(let i=0;i<N*N;i++)for(let c=0;c<3;c++){let z=x[3*i+c]-m[c];v+=g.deg[i]*z*z/(S*3)}return Math.sqrt(v)}
+function edgeEnergy(x,g){let s=0,wS=0;for(let e=0;e<pattern.length;e++){let [i,j]=pattern[e],w=g.weights[e],d=0;for(let c=0;c<3;c++){let z=x[3*i+c]-x[3*j+c];d+=z*z/3}s+=w*d;wS+=w}return s/wS}
+function compute(){
+ const signal=noise(seed),kind=$("control").value,sigma=+$("sigma").value,g=buildGraph(signal,kind,sigma),states=[signal],metrics=[];
+ let cur=signal, nextDepth=1, di=1;
+ metrics.push([0,piRms(cur,g),edgeEnergy(cur,g)]);
+ for(let t=1;t<=256;t++){cur=step(cur,g);if(di<depths.length&&t===depths[di]){states.push(cur);metrics.push([t,piRms(cur,g),edgeEnergy(cur,g)]);di++}}
+ cache={signal,g,states,metrics};render();
+}
+function pixels(canvas,x,mode){
+ let ctx=canvas.getContext("2d"),im=ctx.createImageData(N,N),scale=1,offset=0;
+ if(mode==="signed"){let q=[];for(let i=0;i<x.length;i++)q.push(Math.abs(x[i]));q.sort((a,b)=>a-b);scale=q[Math.floor(.99*q.length)]||1;offset=.5}
+ for(let i=0;i<N*N;i++)for(let c=0;c<3;c++){let v=mode==="signed"?.5+.5*x[3*i+c]/scale:x[3*i+c];im.data[4*i+c]=Math.max(0,Math.min(255,Math.round(v*255)))}for(let i=0;i<N*N;i++)im.data[4*i+3]=255;
+ let tmp=document.createElement("canvas");tmp.width=N;tmp.height=N;tmp.getContext("2d").putImageData(im,0,0);ctx.imageSmoothingEnabled=false;ctx.clearRect(0,0,canvas.width,canvas.height);ctx.drawImage(tmp,0,0,canvas.width,canvas.height)
+}
+function conductance(canvas,g){
+ let v=new Float64Array(N*N),c=new Float64Array(N*N);for(let e=0;e<pattern.length;e++){let [i,j]=pattern[e],z=Math.log10(g.weights[e]/floor+1);v[i]+=z;v[j]+=z;c[i]++;c[j]++}let mx=0;for(let i=0;i<v.length;i++){v[i]/=c[i];mx=Math.max(mx,v[i])}
+ let rgb=new Float64Array(N*N*3);for(let i=0;i<v.length;i++){let z=v[i]/(mx||1);rgb[3*i]=z;rgb[3*i+1]=z;rgb[3*i+2]=z}pixels(canvas,rgb,"plain")
+}
+function chart(rows){
+ const c=$("chart"),ctx=c.getContext("2d"),W=c.width,H=c.height,p=42;ctx.clearRect(0,0,W,H);ctx.fillStyle="#0a0e14";ctx.fillRect(0,0,W,H);
+ const vals=rows.flatMap(r=>[r[1],Math.sqrt(r[2])]),max=Math.max(...vals),min=Math.max(1e-9,Math.min(...vals)),ly=v=>Math.log(v/min)/Math.log(max/min||2);
+ ctx.strokeStyle="#354253";ctx.beginPath();ctx.moveTo(p,H-p);ctx.lineTo(W-p,H-p);ctx.stroke();
+ function line(col,idx,transform=v=>v){ctx.strokeStyle=col;ctx.lineWidth=3;ctx.beginPath();rows.forEach((r,k)=>{let x=p+(W-2*p)*k/(rows.length-1),v=transform(r[idx]),y=H-p-(H-2*p)*ly(v);k?ctx.lineTo(x,y):ctx.moveTo(x,y)});ctx.stroke()}
+ line("#7aa2f7",1);line("#f6c177",2,Math.sqrt);ctx.fillStyle="#9aa7b4";ctx.font="24px system-ui";ctx.fillText("π-RMS",p+8,p);ctx.fillStyle="#7aa2f7";ctx.fillRect(p+110,p-16,30,4);ctx.fillStyle="#9aa7b4";ctx.fillText("√ edge disagreement",p+165,p);ctx.fillStyle="#f6c177";ctx.fillRect(p+395,p-16,30,4);
+ rows.forEach((r,k)=>{let x=p+(W-2*p)*k/(rows.length-1);ctx.fillStyle="#82909e";ctx.font="18px system-ui";ctx.fillText(String(r[0]),x-8,H-10)})
+}
+function render(){
+ if(!cache)return;let idx=+$("depth").value,depth=depths[idx],state=cache.states[idx],next=cache.states[Math.min(idx+1,cache.states.length-1)],res=new Float64Array(state.length);for(let i=0;i<res.length;i++)res[i]=state[i]-next[i];
+ pixels($("input"),cache.signal,"plain");pixels($("state"),state,"plain");pixels($("residue"),res,"signed");conductance($("conductance"),cache.g);chart(cache.metrics);
+ $("depthVal").textContent=depth;$("sigmaVal").textContent=(+$("sigma").value).toFixed(1);$("seedOut").textContent=seed;
+ let ff=0;for(let w of cache.g.weights)if(w<=floor*(1+1e-12))ff++;$("floorOut").textContent=(100*ff/cache.g.weights.length).toFixed(1)+"%";
+ $("rmsOut").textContent=cache.metrics[idx][1].toFixed(4);$("edgeOut").textContent=cache.metrics[idx][2].toExponential(2)
+}
+$("sigma").addEventListener("input",()=>{$("sigmaVal").textContent=(+$("sigma").value).toFixed(1)});$("sigma").addEventListener("change",compute);
+$("control").addEventListener("change",compute);$("depth").addEventListener("input",render);
+$("minus").addEventListener("click",()=>{seed=Math.max(0,seed-1);compute()});$("plus").addEventListener("click",()=>{seed++;compute()});
+$("play").addEventListener("click",()=>{if(timer){clearInterval(timer);timer=null;$("play").textContent="play";return}$("play").textContent="pause";timer=setInterval(()=>{let v=+$("depth").value;if(v>=9)v=-1;$("depth").value=v+1;render()},650)});
+compute();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,32 @@
+name: Spectral geometry checks
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pytest -q
+      - name: Small end-to-end sweep
+        env:
+          MPLBACKEND: Agg
+        run: python spectral_geometry.py --seeds 1 --sigmas 5 --size 16 --max-depth 16 --eig-k 5 --probes 8 --out results/smoke.json --figure figures/smoke.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sihti2-smoke
+          path: |
+            results/smoke.json
+            figures/smoke.png
